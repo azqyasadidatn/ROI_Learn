@@ -13,19 +13,25 @@ cap.set(cv2.CAP_PROP_FPS, 30)
 
 # ============== CONFIGURATION ==============
 CONF_THRESH = 0.3           # Minimum confidence untuk deteksi
-STABILITY_FRAMES = 10       # Jumlah frame stabil untuk auto-lock grid
-STABILITY_THRESHOLD = 20    # Maksimal pergeseran bbox (pixel)
+STABILITY_FRAMES = 10       # Jumlah frame stabil untuk initial auto-lock
+RELOCK_FRAMES = 5           # Jumlah frame untuk re-lock (lebih cepat)
+STABILITY_THRESHOLD = 20    # Maksimal pergeseran bbox (pixel) untuk dianggap stabil
+DRIFT_THRESHOLD = 30        # Jika posisi rak bergeser > ini, trigger re-lock
 MIN_CONFIDENCE = 0.5        # Minimum confidence untuk auto-lock
 
 # ============== STATE VARIABLES ==============
 frame_count = 0
 
-# Auto-calibration
-CALIBRATED = False
-GRID_BOUNDS = None          # (lx1, ly1, lx2, ly2) - FIXED setelah kalibrasi
+# Lock State Machine
+# States: "UNLOCKED", "LOCKED", "RELOCKING"
+lock_state = "UNLOCKED"
+
+# Auto-lock
+GRID_BOUNDS = None          # (lx1, ly1, lx2, ly2) - FIXED setelah lock
 CELL_W = 0
 CELL_H = 0
 love_box_history = []       # History untuk stabilisasi
+current_love_box = None     # Love box saat ini (untuk drift detection)
 
 # Cache
 last_markers = []
@@ -34,12 +40,12 @@ last_grid = [["0"] * 3 for _ in range(3)]
 
 
 # ============== HELPER FUNCTIONS ==============
-def is_bbox_stable(history, threshold):
+def is_bbox_stable(history, threshold, required_frames):
     """Cek apakah bbox stabil selama N frame"""
-    if len(history) < STABILITY_FRAMES:
+    if len(history) < required_frames:
         return False
     
-    recent = history[-STABILITY_FRAMES:]
+    recent = history[-required_frames:]
     x1s, y1s, x2s, y2s = zip(*recent)
     
     return (max(x1s) - min(x1s) < threshold and
@@ -48,9 +54,9 @@ def is_bbox_stable(history, threshold):
             max(y2s) - min(y2s) < threshold)
 
 
-def get_average_bbox(history):
+def get_average_bbox(history, num_frames):
     """Hitung rata-rata bbox dari history"""
-    recent = history[-STABILITY_FRAMES:]
+    recent = history[-num_frames:]
     x1 = int(np.mean([b[0] for b in recent]))
     y1 = int(np.mean([b[1] for b in recent]))
     x2 = int(np.mean([b[2] for b in recent]))
@@ -58,9 +64,27 @@ def get_average_bbox(history):
     return (x1, y1, x2, y2)
 
 
+def calculate_drift(current_box, locked_bounds):
+    """Hitung seberapa jauh posisi rak saat ini dari grid yang di-lock"""
+    if current_box is None or locked_bounds is None:
+        return float('inf')
+    
+    cx1, cy1, cx2, cy2 = current_box
+    lx1, ly1, lx2, ly2 = locked_bounds
+    
+    # Hitung drift untuk setiap corner
+    drift_x1 = abs(cx1 - lx1)
+    drift_y1 = abs(cy1 - ly1)
+    drift_x2 = abs(cx2 - lx2)
+    drift_y2 = abs(cy2 - ly2)
+    
+    # Return maximum drift
+    return max(drift_x1, drift_y1, drift_x2, drift_y2)
+
+
 def get_cell(cx, cy):
     """Hitung cell (row, col) dari koordinat center"""
-    if not CALIBRATED or GRID_BOUNDS is None:
+    if lock_state != "LOCKED" or GRID_BOUNDS is None:
         return None, None
     
     lx1, ly1, lx2, ly2 = GRID_BOUNDS
@@ -78,7 +102,7 @@ def get_cell(cx, cy):
 
 def validate_marker(cx, cy, x1, y1, x2, y2):
     """Validasi apakah marker overlap >= 50% dengan cell"""
-    if not CALIBRATED or GRID_BOUNDS is None:
+    if lock_state != "LOCKED" or GRID_BOUNDS is None:
         return False
     
     row, col = get_cell(cx, cy)
@@ -104,7 +128,9 @@ def validate_marker(cx, cy, x1, y1, x2, y2):
 print("=" * 60)
 print("VISION NODE - Tic-Tac-Toe Board Detection")
 print("=" * 60)
-print(f"Auto-calibration: {STABILITY_FRAMES} frame stabil untuk lock")
+print(f"Initial lock: {STABILITY_FRAMES} frame stabil")
+print(f"Re-lock: {RELOCK_FRAMES} frame (faster)")
+print(f"Drift threshold: {DRIFT_THRESHOLD}px")
 print("Tekan 'r' untuk reset, ESC untuk keluar")
 print("=" * 60)
 
@@ -137,7 +163,7 @@ while cap.isOpened():
                 elif cls_name in ["uknow", "udontknow"]:
                     cx = (x1 + x2) // 2
                     cy = (y1 + y2) // 2
-                    if CALIBRATED:
+                    if lock_state == "LOCKED":
                         if validate_marker(cx, cy, x1, y1, x2, y2):
                             markers.append((cls_name, cx, cy, x1, y1, x2, y2))
                     else:
@@ -145,27 +171,68 @@ while cap.isOpened():
 
         last_markers = markers
         last_all_box = all_box
+        current_love_box = temp_love_box
 
-        # === AUTO-CALIBRATION ===
-        if not CALIBRATED:
+        # === LOCK STATE MACHINE ===
+        
+        if lock_state == "UNLOCKED":
+            # Initial lock - butuh STABILITY_FRAMES frame stabil
             if temp_love_box and temp_love_conf >= MIN_CONFIDENCE:
                 love_box_history.append(temp_love_box)
                 if len(love_box_history) > STABILITY_FRAMES * 2:
                     love_box_history.pop(0)
                 
-                if is_bbox_stable(love_box_history, STABILITY_THRESHOLD):
-                    GRID_BOUNDS = get_average_bbox(love_box_history)
+                if is_bbox_stable(love_box_history, STABILITY_THRESHOLD, STABILITY_FRAMES):
+                    GRID_BOUNDS = get_average_bbox(love_box_history, STABILITY_FRAMES)
                     lx1, ly1, lx2, ly2 = GRID_BOUNDS
                     CELL_W = (lx2 - lx1) // 3
                     CELL_H = (ly2 - ly1) // 3
-                    CALIBRATED = True
+                    lock_state = "LOCKED"
+                    love_box_history.clear()
                     print("=" * 60)
-                    print("✅ AUTO-CALIBRATED! Grid locked.")
+                    print("✅ AUTO-LOCKED! Grid locked.")
                     print(f"   Bounds: {GRID_BOUNDS}")
                     print(f"   Cell: {CELL_W} x {CELL_H}")
                     print("=" * 60)
             else:
                 love_box_history.clear()
+        
+        elif lock_state == "LOCKED":
+            # Monitor untuk drift
+            if temp_love_box and temp_love_conf >= MIN_CONFIDENCE:
+                drift = calculate_drift(temp_love_box, GRID_BOUNDS)
+                
+                if drift > DRIFT_THRESHOLD:
+                    # Drift detected! Trigger re-lock
+                    lock_state = "RELOCKING"
+                    love_box_history.clear()
+                    love_box_history.append(temp_love_box)
+                    print(f"⚠️  Drift detected ({drift:.0f}px)! Re-locking...")
+        
+        elif lock_state == "RELOCKING":
+            # Re-lock - butuh RELOCK_FRAMES frame stabil (lebih cepat)
+            if temp_love_box and temp_love_conf >= MIN_CONFIDENCE:
+                love_box_history.append(temp_love_box)
+                if len(love_box_history) > RELOCK_FRAMES * 2:
+                    love_box_history.pop(0)
+                
+                if is_bbox_stable(love_box_history, STABILITY_THRESHOLD, RELOCK_FRAMES):
+                    GRID_BOUNDS = get_average_bbox(love_box_history, RELOCK_FRAMES)
+                    lx1, ly1, lx2, ly2 = GRID_BOUNDS
+                    CELL_W = (lx2 - lx1) // 3
+                    CELL_H = (ly2 - ly1) // 3
+                    lock_state = "LOCKED"
+                    love_box_history.clear()
+                    print("=" * 60)
+                    print("✅ RE-LOCKED! Grid updated.")
+                    print(f"   New Bounds: {GRID_BOUNDS}")
+                    print(f"   Cell: {CELL_W} x {CELL_H}")
+                    print("=" * 60)
+            else:
+                # Love hilang saat relocking, kembali ke unlocked
+                love_box_history.clear()
+                lock_state = "UNLOCKED"
+                print("❌ Love lost during re-lock. Reset to unlocked.")
 
     # --- VISUALISASI ---
     for cls_name, x1, y1, x2, y2, conf in last_all_box:
@@ -177,9 +244,10 @@ while cap.isOpened():
     # --- GRID LOGIC ---
     grid = [["0"] * 3 for _ in range(3)]
 
-    if CALIBRATED and GRID_BOUNDS:
+    if lock_state == "LOCKED" and GRID_BOUNDS:
         lx1, ly1, lx2, ly2 = GRID_BOUNDS
         
+        # Draw locked grid (hijau)
         cv2.rectangle(frame, (lx1, ly1), (lx2, ly2), (0, 255, 0), 3)
         for i in range(1, 3):
             cv2.line(frame, (lx1 + i * CELL_W, ly1), (lx1 + i * CELL_W, ly2), (0, 255, 0), 2)
@@ -200,11 +268,33 @@ while cap.isOpened():
                 cv2.putText(frame, text, (px, py),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 0), 2)
         
-        cv2.putText(frame, "CALIBRATED", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    else:
+        # Show drift info
+        if current_love_box:
+            drift = calculate_drift(current_love_box, GRID_BOUNDS)
+            drift_color = (0, 255, 0) if drift < DRIFT_THRESHOLD else (0, 0, 255)
+            cv2.putText(frame, f"LOCKED | Drift: {drift:.0f}px", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, drift_color, 2)
+        else:
+            cv2.putText(frame, "LOCKED | Love not visible", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+    
+    elif lock_state == "RELOCKING":
+        progress = min(len(love_box_history) / RELOCK_FRAMES * 100, 100)
+        cv2.putText(frame, f"RE-LOCKING... {progress:.0f}%", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+        bar_w = 200
+        filled = int(bar_w * progress / 100)
+        cv2.rectangle(frame, (10, 40), (10 + bar_w, 60), (100, 100, 100), -1)
+        cv2.rectangle(frame, (10, 40), (10 + filled, 60), (0, 165, 255), -1)
+        
+        # Tetap gambar grid lama (transparan) sebagai referensi
+        if GRID_BOUNDS:
+            lx1, ly1, lx2, ly2 = GRID_BOUNDS
+            cv2.rectangle(frame, (lx1, ly1), (lx2, ly2), (0, 165, 255), 1)
+    
+    else:  # UNLOCKED
         progress = min(len(love_box_history) / STABILITY_FRAMES * 100, 100)
-        cv2.putText(frame, f"Calibrating... {progress:.0f}%", (10, 30),
+        cv2.putText(frame, f"Locking... {progress:.0f}%", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
         bar_w = 200
         filled = int(bar_w * progress / 100)
@@ -222,11 +312,11 @@ while cap.isOpened():
     if key == 27:
         break
     elif key == ord('r'):
-        CALIBRATED = False
+        lock_state = "UNLOCKED"
         GRID_BOUNDS = None
         CELL_W = CELL_H = 0
         love_box_history.clear()
-        print("🔄 Reset kalibrasi")
+        print("🔄 Reset lock")
 
 cap.release()
 cv2.destroyAllWindows()
