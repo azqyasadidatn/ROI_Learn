@@ -1,3 +1,12 @@
+'''Tanggal : 2024-06-12
+deskripsi : 
+kode ini mendeteksi papan tictactoe menggunakan model YOLO, yang kemudian 
+menghitung ke-stabilan bounding box "love" untuk mengunci posisi roi, Diatur dengan
+3 state yaitu UNLOCKED, LOCKED, dan RELOCKING., menggunakan fungsi calculate_drift 
+untuk menghutung jarak dari 'love' yang baru terdeteksi dengan posisi roi saaat ini 
+maka roi tidak akan ada di posisi state lock lagi namun akan berada si state RELOCKING. 
+Dia akan mencari posisi stabil baru dari 'love' untuk mengunci ulang posisi roi.  
+'''
 from ultralytics import YOLO
 import cv2
 import numpy as np
@@ -55,7 +64,8 @@ def is_bbox_stable(history, threshold, required_frames):
 
 
 def get_average_bbox(history, num_frames):
-    """Hitung rata-rata bbox dari history"""
+    """Hitung rata-rata posisi bbox dari history atau Menghitung rata-rata bbox agar lebih stabil
+    dari N frame terakhir untuk mendapatkan koordinat yang lebih akurat (mengurangi noise)."""
     recent = history[-num_frames:]
     x1 = int(np.mean([b[0] for b in recent]))
     y1 = int(np.mean([b[1] for b in recent]))
@@ -65,7 +75,7 @@ def get_average_bbox(history, num_frames):
 
 
 def calculate_drift(current_box, locked_bounds):
-    """Hitung seberapa jauh posisi rak saat ini dari grid yang di-lock"""
+    """Hitung seberapa jauh posisi rak saat ini dari grid yang di-lock,  Jika drift besar → perlu re-lock."""
     if current_box is None or locked_bounds is None:
         return float('inf')
     
@@ -83,7 +93,8 @@ def calculate_drift(current_box, locked_bounds):
 
 
 def get_cell(cx, cy):
-    """Hitung cell (row, col) dari koordinat center"""
+    """Hitung cell (row, col) dari koordinat center dan baru bisa di hitung jika 
+    state nya bukan LOCKED atau GRID_BOUNDS tidak ada"""
     if lock_state != "LOCKED" or GRID_BOUNDS is None:
         return None, None
     
@@ -311,12 +322,14 @@ while cap.isOpened():
     key = cv2.waitKey(1) & 0xFF
     if key == 27:
         break
+    elif cv2.getWindowProperty("YOLO Grid - Vision Node", cv2.WND_PROP_VISIBLE) < 1:
+            break
     elif key == ord('r'):
         lock_state = "UNLOCKED"
         GRID_BOUNDS = None
         CELL_W = CELL_H = 0
         love_box_history.clear()
-        print("🔄 Reset lock")
+        print("Reset lock")
 
 cap.release()
 cv2.destroyAllWindows()

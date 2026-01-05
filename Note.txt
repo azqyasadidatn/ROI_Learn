@@ -10,3 +10,28 @@ ketika dia nerima data bahwa robotnya sedang ber'aksi') and than robotnya balik 
 karena bisa jadi posisi raknya di kamera udh berubah dia akan mendeteksi ulang keberadan raknya dan lock lagi, ini bakalan 
 lbh baik kalau dia tau posisi rak dimana dan kita gak usah deteksi dan lock ulang, tapi lebih baik gini dari pada always setiap
 frame berubah dia mendeteksi rak nya  dan jadinya malah gak stabil
+
+or gampangnya
+
+1. YOLO detect "love" dan marker
+          ↓
+2. Jika UNLOCKED:
+   - Simpan love_box ke history
+   - Cek is_bbox_stable(history, 20px, 10 frame)
+   - Jika stabil → get_average_bbox() → LOCKED
+          ↓
+3. Jika LOCKED:
+   - calculate_drift(current, locked)
+   - Jika drift > 30px → RELOCKING
+   - Untuk setiap marker:
+     - validate_marker() → cek overlap 50%
+     - get_cell() → dapat (row, col)
+     - Isi grid[row][col]
+          ↓
+4. Jika RELOCKING:
+   - Simpan love_box ke history
+   - Cek is_bbox_stable(history, 20px, 5 frame)
+   - Jika stabil → get_average_bbox() → LOCKED
+   - Jika love hilang → UNLOCKED
+          ↓
+5. Output: print(grid) jika berubah
