@@ -1,11 +1,18 @@
 '''Tanggal : 2024-06-12
-deskripsi : 
-kode ini mendeteksi papan tictactoe menggunakan model YOLO, yang kemudian 
-menghitung ke-stabilan bounding box "love" untuk mengunci posisi roi, Diatur dengan
-3 state yaitu UNLOCKED, LOCKED, dan RELOCKING., menggunakan fungsi calculate_drift 
-untuk menghutung jarak dari 'love' yang baru terdeteksi dengan posisi roi saaat ini 
-maka roi tidak akan ada di posisi state lock lagi namun akan berada si state RELOCKING. 
-Dia akan mencari posisi stabil baru dari 'love' untuk mengunci ulang posisi roi.  
+Deskripsi:
+Kode ini mendeteksi papan Tic-Tac-Toe menggunakan model YOLO. Program menghitung 
+ke-stabilan bounding box "love" (papan) untuk mengunci posisi ROI (Region of Interest).
+
+Diatur dengan 3 state:
+- UNLOCKED  : Belum ada grid, sedang mencari posisi stabil "love" (butuh 10 frame)
+- LOCKED    : Grid sudah terkunci, aktif mendeteksi marker dan monitoring drift
+- RELOCKING : Drift terdeteksi, sedang mencari posisi stabil baru (butuh 5 frame)
+
+Menggunakan fungsi calculate_drift() untuk menghitung jarak dari "love" yang baru 
+terdeteksi dengan posisi ROI saat ini. Jika drift > threshold, state berpindah dari 
+LOCKED ke RELOCKING untuk mencari posisi stabil baru dan mengunci ulang posisi ROI.
+
+Output: Matrix 3x3 yang merepresentasikan state papan Tic-Tac-Toe.
 '''
 from ultralytics import YOLO
 import cv2
@@ -14,19 +21,18 @@ import numpy as np
 # Load YOLO model
 model = YOLO(r"/home/azqya/Documents/BANDHA26/ROI_Learn/best (7).pt")
 
-# Open webcam
+
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 cap.set(cv2.CAP_PROP_FPS, 30)
 
-# ============== CONFIGURATION ==============
-CONF_THRESH = 0.3           # Minimum confidence untuk deteksi
-STABILITY_FRAMES = 10       # Jumlah frame stabil untuk initial auto-lock
-RELOCK_FRAMES = 5           # Jumlah frame untuk re-lock (lebih cepat)
-STABILITY_THRESHOLD = 20    # Maksimal pergeseran bbox (pixel) untuk dianggap stabil
-DRIFT_THRESHOLD = 30        # Jika posisi rak bergeser > ini, trigger re-lock
-MIN_CONFIDENCE = 0.5        # Minimum confidence untuk auto-lock
+CONF_THRESH = 0.3           
+STABILITY_FRAMES = 10       
+RELOCK_FRAMES = 5           
+STABILITY_THRESHOLD = 20    
+DRIFT_THRESHOLD = 30
+MIN_CONFIDENCE = 0.5        
 
 # ============== STATE VARIABLES ==============
 frame_count = 0
@@ -93,8 +99,11 @@ def calculate_drift(current_box, locked_bounds):
 
 
 def get_cell(cx, cy):
-    """Hitung cell (row, col) dari koordinat center dan baru bisa di hitung jika 
-    state nya bukan LOCKED atau GRID_BOUNDS tidak ada"""
+    """Hitung cell dimana (row, col) dari koordinat center. HANYA bisa dihitung jika:
+    - state adalah "LOCKED" 
+    - GRID_BOUNDS sudah ada
+    Jika kondisi tidak terpenuhi atau koordinat di luar grid → return (None, None)
+    """
     if lock_state != "LOCKED" or GRID_BOUNDS is None:
         return None, None
     
@@ -122,10 +131,10 @@ def validate_marker(cx, cy, x1, y1, x2, y2):
     
     lx1, ly1, _, _ = GRID_BOUNDS
     
-    cell_x1 = lx1 + col * CELL_W
-    cell_y1 = ly1 + row * CELL_H
-    cell_x2 = cell_x1 + CELL_W
-    cell_y2 = cell_y1 + CELL_H
+    cell_x1 = lx1 + col * CELL_W #kiri
+    cell_y1 = ly1 + row * CELL_H #atas
+    cell_x2 = cell_x1 + CELL_W #kanan
+    cell_y2 = cell_y1 + CELL_H #bawah
     
     overlap_x = max(0, min(x2, cell_x2) - max(x1, cell_x1))
     overlap_y = max(0, min(y2, cell_y2) - max(y1, cell_y1))

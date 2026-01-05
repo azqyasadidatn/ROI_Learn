@@ -35,3 +35,68 @@ or gampangnya
    - Jika love hilang → UNLOCKED
           ↓
 5. Output: print(grid) jika berubah
+
+
+======================================================================================================
+
+this one is anot validate marker funtion 
+
+it's overlap whan more then fifty percent dari hitungan :
+overlap_x = max(0, min(marker_kanan, cell_kanan) - max(marker_kiri, cell_kiri))
+overlap_y = max(0, min(marker_bawah, cell_bawah) - max(marker_atas, cell_atas))
+
+Contoh:
+  Marker: (220, 170, 280, 230) → lebar=60, tinggi=60, area=3600
+  Cell:   (200, 150, 300, 250) → lebar=100, tinggi=100
+
+  overlap_x = min(280, 300) - max(220, 200) = 280 - 220 = 60
+  overlap_y = min(230, 250) - max(170, 150) = 230 - 170 = 60
+  overlap_area = 60 × 60 = 3600
+  
+  rasio = 3600 / 3600 = 100% → VALID!
+
+CASE 1: VALID (overlap > 50%)
+
+Cell [1][1]:
+┌─────────────────────┐
+│                     │
+│    ┌───────────┐    │
+│    │  MARKER   │    │  ← 90% marker di dalam cell
+│    │   (B)     │    │
+│    └───────────┘    │
+│                     │
+└─────────────────────┘
+
+overlap_area = 90% × marker_area
+90% >= 50% → VALID ✅
+
+
+CASE 2: INVALID (overlap < 50%)
+
+Cell [1][1]:                    Cell [1][2]:
+┌─────────────────────┐        ┌─────────────────────┐
+│                     │        │                     │
+│               ┌─────┼────────┼─────┐               │
+│               │     │ MARKER │     │  ← 40% di cell[1][1]
+│               │     │  (B)   │     │    60% di cell[1][2]
+│               └─────┼────────┼─────┘
+│                     │        │
+└─────────────────────┘        └─────────────────────┘
+
+Center ada di cell[1][1], tapi overlap cuma 40%
+40% < 50% → INVALID ❌
+
+
+CASE 3: MARKER LEWAT (di luar grid)
+
+┌─────────────────────┐
+│                     │
+│       Cell          │        ┌───────────┐
+│                     │        │  MARKER   │ ← Di luar grid!
+│                     │        │   (R)     │
+└─────────────────────┘        └───────────┘
+
+Center di luar grid → INVALID ❌
+
+
+
